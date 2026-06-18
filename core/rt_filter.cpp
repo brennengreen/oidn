@@ -78,6 +78,8 @@ OIDN_NAMESPACE_BEGIN
       setParam(albedo, image);
     else if (name == "normal")
       setParam(normal, image);
+    else if (name == "flow")
+      setParam(flow, image);
     else if (name == "output")
       setParam(output, image);
     else
@@ -94,6 +96,8 @@ OIDN_NAMESPACE_BEGIN
       removeParam(albedo);
     else if (name == "normal")
       removeParam(normal);
+    else if (name == "flow")
+      removeParam(flow);
     else if (name == "output")
       removeParam(output);
     else

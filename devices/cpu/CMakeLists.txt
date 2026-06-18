@@ -57,6 +57,8 @@ set(OIDN_CPU_SOURCES
   cpu_output_process.cpp
   cpu_pool.h
   cpu_pool.cpp
+  cpu_temporal_accumulation.h
+  cpu_temporal_accumulation.cpp
   cpu_upsample.h
   cpu_upsample.cpp
   tasking.h

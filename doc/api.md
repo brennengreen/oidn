@@ -1123,7 +1123,9 @@ implemented in Open Image Denoise.
 The `RT` (**r**ay **t**racing) filter is a generic ray tracing denoising filter
 which is suitable for denoising images rendered with Monte Carlo ray tracing
 methods like unidirectional and bidirectional path tracing. It supports depth
-of field and motion blur as well, but it is *not* temporally stable. The filter
+of field and motion blur as well. By default it denoises each image
+independently, but it can also produce temporally stable results for image
+sequences (see [Temporal Stability]). The filter
 is based on a convolutional neural network (CNN) and comes with a set of
 pre-trained  models that work well with a wide range of ray tracing based
 renderers and noise levels.
@@ -1177,6 +1179,11 @@ Type        Name               Default Description
                                        (1--3 channels, world-space or view-space vectors with arbitrary
                                        length, values in [-1, 1])
 
+`Image`     `flow`          *optional* input image containing the 2D screen-space motion vectors per
+                                       pixel (at least 2 channels, in pixels), used by the `temporal`
+                                       feature to reproject the previous frame; each vector maps a pixel
+                                       to its position in the *previous* frame (backward motion)
+
 `Image`     `output`        *required* output image (1--3 channels); can be one of the input images
 
 `Bool`      `hdr`              `false` the main input image is HDR
@@ -1196,6 +1203,20 @@ Type        Name               Default Description
 `Bool`      `cleanAux`         `false` the auxiliary feature (albedo, normal) images are noise-free;
                                        recommended for highest quality but should *not* be enabled for
                                        noisy auxiliary images to avoid residual noise
+
+`Bool`      `temporal`         `false` enables temporally stable denoising of image sequences
+                                       (animations) using motion-compensated temporal accumulation; the
+                                       filter object must be reused across the frames of a sequence and
+                                       maintains the required history internally; provide the `flow`
+                                       image for moving content (see [Temporal Stability])
+
+`Float`     `temporalAlpha`      `0.2` weight of the current frame when `temporal` is enabled, in [0, 1];
+                                       smaller values are more temporally stable but introduce more lag,
+                                       larger values respond faster but are less stable
+
+`Float`     `temporalClamp`      `1.0` strength of the neighborhood color clamping (history rejection)
+                                       when `temporal` is enabled, in [0, +inf); 0 disables clamping
+                                       (maximum stability but may ghost), larger values keep more history
 
 `Int`       `quality`             high image quality mode as an `OIDNQuality` value
 
@@ -1359,6 +1380,48 @@ expected across devices compared to the *high* quality mode.
 The difference in quality and performance between quality modes depends on the
 combination of input features, parameters (e.g. `cleanAux`), and the device
 architecture. In some cases the difference may be small or even none.
+
+#### Temporal Stability
+
+When denoising the frames of an animation independently, the per-frame output
+may exhibit *temporal* artifacts, i.e. flickering, because the denoiser maps the
+slightly different random noise of each frame to slightly different results. The
+`RT` filter can optionally suppress this flickering by enabling the `temporal`
+parameter, which performs motion-compensated temporal accumulation of the
+denoised frames (as in SVGF/TAA). This reuses the existing spatial models and
+thus requires *no* retraining or special weights.
+
+When `temporal` is enabled, the filter blends the current denoised frame with
+the previous accumulated frame. The previous frame is reprojected using the
+per-pixel screen-space motion vectors provided in the `flow` image (each vector
+points from a pixel to its position in the *previous* frame), and is rejected
+where it disagrees with the local neighborhood of the current frame
+(neighborhood color clamping) to avoid ghosting on moving or changing content.
+If no `flow` image is set, static reprojection is assumed, which still
+stabilizes static and slowly changing regions.
+
+The filter maintains the history internally, so the *same* filter object must be
+reused for all frames of a sequence, executing it once per frame. The history is
+automatically reset (the current frame is passed through unchanged) on the first
+execution and whenever the filter is re-committed with changes that rebuild the
+model (e.g. a resolution change or a scene cut, by toggling `temporal`). The
+strength of the effect is controlled by `temporalAlpha` (the weight of the
+current frame; smaller is more stable but laggier) and `temporalClamp` (the
+history rejection strength; smaller keeps more history but may ghost).
+
+    // Set up once
+    filter.set("temporal", true);
+    filter.setImage("color",  colorBuf,  oidn::Format::Float3, width, height);
+    filter.setImage("flow",   flowBuf,   oidn::Format::Float3, width, height);
+    filter.setImage("output", outputBuf, oidn::Format::Float3, width, height);
+    filter.commit();
+
+    // Then, for each frame of the sequence:
+    //   update colorBuf and flowBuf with the current frame's data
+    filter.execute();
+
+Temporal accumulation is currently supported only on the CPU device; enabling it
+on other devices raises an error.
 
 #### Weights
 

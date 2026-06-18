@@ -54,6 +54,8 @@ OIDN_NAMESPACE_BEGIN
     }
     else if (name == "maxMemoryMB")
       setParam(maxMemoryMB, value);
+    else if (name == "temporal")
+      setParam(temporal, value);
     else
       device->printWarning("unknown filter parameter or type mismatch: '" + name + "'");
 
@@ -66,6 +68,8 @@ OIDN_NAMESPACE_BEGIN
       return static_cast<int>(quality);
     else if (name == "maxMemoryMB")
       return maxMemoryMB;
+    else if (name == "temporal")
+      return temporal;
     else if (name == "tileAlignment")
       return tileAlignment;
     else if (name == "alignment")
@@ -93,6 +97,10 @@ OIDN_NAMESPACE_BEGIN
       device->printWarning("filter parameter 'hdrScale' is deprecated, use 'inputScale' instead");
       inputScale = value;
     }
+    else if (name == "temporalAlpha")
+      temporalAlpha = value;
+    else if (name == "temporalClamp")
+      temporalClamp = value;
     else
       device->printWarning("unknown filter parameter or type mismatch: '" + name + "'");
 
@@ -108,6 +116,10 @@ OIDN_NAMESPACE_BEGIN
       device->printWarning("filter parameter 'hdrScale' is deprecated, use 'inputScale' instead");
       return inputScale;
     }
+    else if (name == "temporalAlpha")
+      return temporalAlpha;
+    else if (name == "temporalClamp")
+      return temporalClamp;
     else
       throw Exception(Error::InvalidArgument, "unknown filter parameter or type mismatch: '" + name + "'");
   }
@@ -164,6 +176,8 @@ OIDN_NAMESPACE_BEGIN
           workAmount += autoexposure->getWorkAmount();
         if (outputTemp)
           workAmount += imageCopy->getWorkAmount();
+        if (temporal)
+          workAmount += temporalAccum->getWorkAmount() + historyCopy->getWorkAmount();
 
         progress = makeRef<Progress>(progressFunc, progressUserPtr, workAmount);
       }
@@ -247,6 +261,36 @@ OIDN_NAMESPACE_BEGIN
       {
         imageCopy->setDst(output);
         imageCopy->submit(progress);
+      }
+
+      // Temporally accumulate the denoised frame for temporal stability
+      if (temporal)
+      {
+        device->submitBarrier();
+
+        const Ref<Image>& historyPrev = historyParity ? historyB : historyA;
+        const Ref<Image>& historyCur  = historyParity ? historyA : historyB;
+
+        // Blend the current denoised output with the motion-compensated history
+        temporalAccum->setColor(output);
+        temporalAccum->setHistory(historyPrev);
+        temporalAccum->setFlow(flow); // may be null (static reprojection)
+        temporalAccum->setDst(historyCur);
+        temporalAccum->setAlpha(temporalAlpha);
+        temporalAccum->setClampStrength(temporalClamp);
+        temporalAccum->setReset(temporalReset);
+        temporalAccum->submit(progress);
+
+        device->submitBarrier();
+
+        // Write the accumulated result back to the user output image
+        historyCopy->setSrc(historyCur);
+        historyCopy->setDst(output);
+        historyCopy->submit(progress);
+
+        // The accumulated frame becomes the history for the next frame
+        historyParity = !historyParity;
+        temporalReset = false;
       }
     }, sync);
   }
@@ -341,6 +385,10 @@ OIDN_NAMESPACE_BEGIN
     autoexposure.reset();
     imageCopy.reset();
     outputTemp.reset();
+    temporalAccum.reset();
+    historyCopy.reset();
+    historyA.reset();
+    historyB.reset();
   }
 
   void UNetFilter::checkParams()
@@ -373,6 +421,17 @@ OIDN_NAMESPACE_BEGIN
         (albedo && (albedo->getW() != output->getW() || albedo->getH() != output->getH())) ||
         (normal && (normal->getW() != output->getW() || normal->getH() != output->getH())))
       throw Exception(Error::InvalidOperation, "image size mismatch");
+
+    if (flow)
+    {
+      if (!isSupportedFormat(flow->getFormat()) || flow->getC() < 2)
+        throw Exception(Error::InvalidOperation, "flow image must have at least 2 channels");
+      if (flow->getW() != output->getW() || flow->getH() != output->getH())
+        throw Exception(Error::InvalidOperation, "flow image size mismatch");
+    }
+
+    if (temporal && !device->getEngine()->isTemporalAccumulationSupported())
+      throw Exception(Error::InvalidOperation, "temporal denoising is not supported by this device");
 
     if (directional && (hdr || srgb))
       throw Exception(Error::InvalidOperation, "directional and hdr/srgb modes cannot be enabled at the same time");
@@ -645,6 +704,25 @@ OIDN_NAMESPACE_BEGIN
       imageCopy->finalize();
     }
 
+    // Create the temporal accumulation resources (for temporally stable denoising)
+    if (temporal)
+    {
+      Engine* engine = device->getEngine();
+
+      // Persistent ping-pong history buffers holding the accumulated frames
+      historyA = makeRef<Image>(engine, output->getFormat(), W, H);
+      historyB = makeRef<Image>(engine, output->getFormat(), W, H);
+
+      temporalAccum = engine->newTemporalAccumulation();
+      temporalAccum->finalize();
+
+      historyCopy = engine->newImageCopy();
+      historyCopy->finalize();
+
+      historyParity = false;
+      temporalReset = true; // the first frame has no usable history
+    }
+
     // Print statistics
     if (device->isVerbose(2))
       std::cout << "Memory usage: " << totalMemoryByteSize << std::endl;
@@ -664,6 +742,10 @@ OIDN_NAMESPACE_BEGIN
     autoexposure.reset();
     imageCopy.reset();
     outputTemp.reset();
+    temporalAccum.reset();
+    historyCopy.reset();
+    historyA.reset();
+    historyB.reset();
   }
 
 OIDN_NAMESPACE_END

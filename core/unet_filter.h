@@ -8,6 +8,7 @@
 #include "color.h"
 #include "autoexposure.h"
 #include "image_copy.h"
+#include "temporal_accumulation.h"
 
 OIDN_NAMESPACE_BEGIN
 
@@ -42,6 +43,7 @@ OIDN_NAMESPACE_BEGIN
     Ref<Image> color;
     Ref<Image> albedo;
     Ref<Image> normal;
+    Ref<Image> flow;   // motion vectors for temporal accumulation (optional)
     Ref<Image> output;
 
     // Options
@@ -52,6 +54,9 @@ OIDN_NAMESPACE_BEGIN
     bool directional = false;
     float inputScale = std::numeric_limits<float>::quiet_NaN();
     bool cleanAux = false;
+    bool temporal = false;       // temporally stable denoising (temporal accumulation)
+    float temporalAlpha = 0.2f;  // weight of the current frame in [0, 1]
+    float temporalClamp = 1.0f;  // neighborhood color clamping strength (0 disables)
     int maxMemoryMB = -1;     // maximum memory usage limit in MBs, disabled if < 0
     int prevMaxMemoryMB = -1; // maximum memory usage limit in MBs from the previous commit
 
@@ -123,6 +128,14 @@ OIDN_NAMESPACE_BEGIN
     Ref<ImageCopy> imageCopy;
     Ref<Image> outputTemp;
     bool largeModel = false; // is UNetLarge?
+
+    // Temporal accumulation (for temporally stable denoising)
+    Ref<TemporalAccumulation> temporalAccum;
+    Ref<ImageCopy> historyCopy;
+    Ref<Image> historyA;        // ping-pong history buffers
+    Ref<Image> historyB;
+    bool historyParity = false; // selects which history buffer holds the previous frame
+    bool temporalReset = true;  // ignore history on the first frame of a sequence
   };
 
 OIDN_NAMESPACE_END

@@ -1,6 +1,16 @@
 Version History
 ---------------
 
+### Changes in v2.6.0:
+
+-   Added temporally stable denoising for image sequences (animations) to the
+    `RT` filter via the new `temporal` parameter, which performs
+    motion-compensated temporal accumulation of the denoised frames with
+    neighborhood-based history rejection. It reuses the existing spatial models
+    (no retraining required), accepts optional screen-space motion vectors via
+    the new `flow` image, and is controlled by the `temporalAlpha` and
+    `temporalClamp` parameters. Currently supported on the CPU device.
+
 ### Changes in v2.5.0:
 
 -   Significantly improved performance and reduced memory usage on Intel GPUs

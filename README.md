@@ -1607,8 +1607,10 @@ implemented in Open Image Denoise.
 The `RT` (**r**ay **t**racing) filter is a generic ray tracing denoising
 filter which is suitable for denoising images rendered with Monte Carlo
 ray tracing methods like unidirectional and bidirectional path tracing.
-It supports depth of field and motion blur as well, but it is *not*
-temporally stable. The filter is based on a convolutional neural network
+It supports depth of field and motion blur as well. By default it
+denoises each image independently, but it can also produce temporally
+stable results for image sequences via the `temporal` parameter. The
+filter is based on a convolutional neural network
 (CNN) and comes with a set of pre-trained models that work well with a
 wide range of ray tracing based renderers and noise levels.
 

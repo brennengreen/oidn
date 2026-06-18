@@ -16,6 +16,7 @@
 #include "cpu_input_process.h"
 #include "cpu_output_process.h"
 #include "cpu_image_copy.h"
+#include "cpu_temporal_accumulation.h"
 
 OIDN_NAMESPACE_BEGIN
 
@@ -138,6 +139,11 @@ OIDN_NAMESPACE_BEGIN
   Ref<ImageCopy> CPUEngine::newImageCopy()
   {
     return makeRef<CPUImageCopy>(this);
+  }
+
+  Ref<TemporalAccumulation> CPUEngine::newTemporalAccumulation()
+  {
+    return makeRef<CPUTemporalAccumulation>(this);
   }
 
   void CPUEngine::submitFunc(std::function<void()>&& f, const Ref<CancellationToken>& ct)

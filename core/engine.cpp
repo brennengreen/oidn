@@ -129,6 +129,11 @@ OIDN_NAMESPACE_BEGIN
     throw std::logic_error("concat+conv operation is not implemented");
   }
 
+  Ref<TemporalAccumulation> Engine::newTemporalAccumulation()
+  {
+    throw std::logic_error("temporal accumulation is not implemented by this device");
+  }
+
   void* Engine::usmAlloc(size_t byteSize, Storage storage)
   {
     throw std::logic_error("USM is not supported by the device");

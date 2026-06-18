@@ -36,6 +36,9 @@ OIDN_NAMESPACE_BEGIN
     Ref<OutputProcess> newOutputProcess(const OutputProcessDesc& desc) override;
     Ref<ImageCopy> newImageCopy() override;
 
+    bool isTemporalAccumulationSupported() const override { return true; }
+    Ref<TemporalAccumulation> newTemporalAccumulation() override;
+
     // Unified shared memory (USM)
     void* usmAlloc(size_t byteSize, Storage storage) override;
     void usmFree(void* ptr, Storage storage) override;

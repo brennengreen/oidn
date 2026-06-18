@@ -32,6 +32,7 @@ OIDN_NAMESPACE_BEGIN
   class InputProcess;
   class OutputProcess;
   class ImageCopy;
+  class TemporalAccumulation;
 
   // Execution engine of a subdevice
   class Engine
@@ -95,6 +96,11 @@ OIDN_NAMESPACE_BEGIN
     virtual Ref<InputProcess> newInputProcess(const InputProcessDesc& desc) = 0;
     virtual Ref<OutputProcess> newOutputProcess(const OutputProcessDesc& desc) = 0;
     virtual Ref<ImageCopy> newImageCopy() = 0;
+
+    // Optional temporal accumulation op (for temporally stable denoising).
+    // Devices that do not implement it throw; callers must check support.
+    virtual bool isTemporalAccumulationSupported() const { return false; }
+    virtual Ref<TemporalAccumulation> newTemporalAccumulation();
 
     // Unified shared memory (USM)
     virtual void* usmAlloc(size_t byteSize, Storage storage);

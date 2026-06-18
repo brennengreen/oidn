@@ -780,6 +780,133 @@ TEST_CASE("filter parameters", "[filter_params]")
 
 // -------------------------------------------------------------------------------------------------
 
+// Builds a small noisy HDR frame: a smooth, frame-independent base signal (the
+// implicit "ground truth") plus different multiplicative noise per frame.
+std::shared_ptr<ImageBuffer> makeNoisyFrame(DeviceRef& device, int W, int H, uint32_t seed)
+{
+  Random rng(seed);
+  auto img = std::make_shared<ImageBuffer>(device, W, H, 3, DataType::Float32);
+  for (int y = 0; y < H; ++y)
+    for (int x = 0; x < W; ++x)
+    {
+      const float u = float(x) / W, v = float(y) / H;
+      const float base[3] = {0.2f + 0.6f*u, 0.3f + 0.5f*v, 0.4f + 0.3f*(1.f-u)};
+      for (int c = 0; c < 3; ++c)
+      {
+        const float n = std::exp((rng.getFloat() - 0.5f) * 1.2f); // positive, mean ~1
+        img->set((size_t(y)*W + x)*3 + c, base[c] * n);
+      }
+    }
+  return img;
+}
+
+TEST_CASE("temporal stability", "[temporal]")
+{
+  const int W = 64, H = 64, F = 8;
+
+  DeviceRef device = makeAndCommitDevice();
+
+  SECTION("parameter round-trip")
+  {
+    FilterRef filter = device.newFilter("RT");
+    filter.set("temporal", true);
+    REQUIRE(filter.get<bool>("temporal") == true);
+    filter.set("temporal", false);
+    REQUIRE(filter.get<bool>("temporal") == false);
+    filter.set("temporalAlpha", 0.15f);
+    REQUIRE(filter.get<float>("temporalAlpha") == 0.15f);
+    filter.set("temporalClamp", 2.0f);
+    REQUIRE(filter.get<float>("temporalClamp") == 2.0f);
+    REQUIRE(device.getError() == Error::None);
+  }
+
+  // Determine whether this device supports temporal accumulation
+  bool supported;
+  {
+    auto color  = makeConstImage(device, W, H);
+    auto output = makeImage(device, W, H);
+    FilterRef filter = device.newFilter("RT");
+    setFilterImage(filter, "color",  color);
+    setFilterImage(filter, "output", output);
+    filter.set("hdr", true);
+    filter.set("temporal", true);
+    filter.commit();
+    supported = (device.getError() == Error::None);
+  }
+
+  if (!supported)
+  {
+    // Devices without temporal support must reject it with a clear error
+    // (consumed above); there is nothing else to verify.
+    return;
+  }
+
+  // Build a noisy static sequence; both runs consume identical inputs
+  std::vector<std::shared_ptr<ImageBuffer>> frames;
+  for (int t = 0; t < F; ++t)
+    frames.push_back(makeNoisyFrame(device, W, H, 1u + t));
+
+  auto runSeq = [&](bool temporal)
+  {
+    auto color  = makeImage(device, W, H);
+    auto output = makeImage(device, W, H);
+    FilterRef filter = device.newFilter("RT");
+    setFilterImage(filter, "color",  color);
+    setFilterImage(filter, "output", output);
+    filter.set("hdr", true);
+    if (temporal)
+    {
+      filter.set("temporal", true);
+      filter.set("temporalAlpha", 0.1f);
+      filter.set("temporalClamp", 1.0f);
+    }
+    filter.commit();
+    REQUIRE(device.getError() == Error::None);
+
+    std::vector<std::shared_ptr<ImageBuffer>> outs;
+    for (int t = 0; t < F; ++t)
+    {
+      for (size_t i = 0; i < color->getSize(); ++i)
+        color->set(i, frames[t]->get(i));
+      color->toDevice();
+      filter.execute();
+      REQUIRE(device.getError() == Error::None);
+      output->toHost();
+      outs.push_back(output->clone());
+    }
+    return outs;
+  };
+
+  auto off = runSeq(false);
+  auto on  = runSeq(true);
+
+  // Reset behavior: the first temporal frame passes the denoised current frame
+  // through unchanged, so it must match the non-temporal first frame.
+  double firstFrameDiff = 0;
+  for (size_t i = 0; i < off[0]->getSize(); ++i)
+    firstFrameDiff += std::fabs(off[0]->get(i) - on[0]->get(i));
+  firstFrameDiff /= off[0]->getSize();
+  REQUIRE(firstFrameDiff < 1e-4);
+
+  // Flicker = mean frame-to-frame L1 of the denoised outputs. On a static scene
+  // temporal accumulation must reduce it substantially.
+  auto flicker = [&](const std::vector<std::shared_ptr<ImageBuffer>>& D)
+  {
+    double s = 0;
+    for (size_t t = 1; t < D.size(); ++t)
+      for (size_t i = 0; i < D[t]->getSize(); ++i)
+        s += std::fabs(D[t]->get(i) - D[t-1]->get(i));
+    return s / (double(D[0]->getSize()) * (D.size() - 1));
+  };
+
+  const double flickerOff = flicker(off);
+  const double flickerOn  = flicker(on);
+  REQUIRE(flickerOn < flickerOff);        // strictly more temporally stable
+  REQUIRE(flickerOn < 0.85 * flickerOff); // by a clear margin
+}
+
+// -------------------------------------------------------------------------------------------------
+
 void multiFilter1PerDeviceTest(DeviceRef& device, const std::vector<int>& sizes, bool reuseFilter)
 {
   FilterRef filter;
