@@ -57,6 +57,7 @@ OIDN_NAMESPACE_BEGIN
     bool temporal = false;       // temporally stable denoising (temporal accumulation)
     float temporalAlpha = 0.2f;  // weight of the current frame in [0, 1]
     float temporalClamp = 1.0f;  // neighborhood color clamping strength (0 disables)
+    float temporalSharpness = 0.0f; // post-resolve sharpening strength (0 disables)
     int maxMemoryMB = -1;     // maximum memory usage limit in MBs, disabled if < 0
     int prevMaxMemoryMB = -1; // maximum memory usage limit in MBs from the previous commit
 
@@ -131,7 +132,6 @@ OIDN_NAMESPACE_BEGIN
 
     // Temporal accumulation (for temporally stable denoising)
     Ref<TemporalAccumulation> temporalAccum;
-    Ref<ImageCopy> historyCopy;
     Ref<Image> historyA;        // ping-pong history buffers
     Ref<Image> historyB;
     bool historyParity = false; // selects which history buffer holds the previous frame

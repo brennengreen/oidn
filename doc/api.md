@@ -1218,6 +1218,11 @@ Type        Name               Default Description
                                        when `temporal` is enabled, in [0, +inf); 0 disables clamping
                                        (maximum stability but may ghost), larger values keep more history
 
+`Float`     `temporalSharpness`  `0.0` post-resolve sharpening strength when `temporal` is enabled, in
+                                       [0, +inf); 0 disables it; recovers detail softened by denoising
+                                       and history resampling. Applied to the already-stabilized frame,
+                                       so it does not amplify noise or affect temporal stability
+
 `Int`       `quality`             high image quality mode as an `OIDNQuality` value
 
 `Data`      `weights`       *optional* trained model weights blob
@@ -1408,6 +1413,13 @@ model (e.g. a resolution change or a scene cut, by toggling `temporal`). The
 strength of the effect is controlled by `temporalAlpha` (the weight of the
 current frame; smaller is more stable but laggier) and `temporalClamp` (the
 history rejection strength; smaller keeps more history but may ghost).
+
+The history is reprojected with a sharp Catmull-Rom filter to avoid the
+accumulation blur that bilinear resampling would cause under sub-pixel motion.
+In addition, the `temporalSharpness` parameter applies an optional sharpening
+pass to the resolved output. Because it sharpens the *already-stabilized* frame
+(after the noise has been removed) and is not fed back into the history, it
+recovers fine detail without amplifying noise or reducing temporal stability.
 
     // Set up once
     filter.set("temporal", true);

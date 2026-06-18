@@ -817,6 +817,8 @@ TEST_CASE("temporal stability", "[temporal]")
     REQUIRE(filter.get<float>("temporalAlpha") == 0.15f);
     filter.set("temporalClamp", 2.0f);
     REQUIRE(filter.get<float>("temporalClamp") == 2.0f);
+    filter.set("temporalSharpness", 0.75f);
+    REQUIRE(filter.get<float>("temporalSharpness") == 0.75f);
     REQUIRE(device.getError() == Error::None);
   }
 

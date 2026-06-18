@@ -101,6 +101,8 @@ OIDN_NAMESPACE_BEGIN
       temporalAlpha = value;
     else if (name == "temporalClamp")
       temporalClamp = value;
+    else if (name == "temporalSharpness")
+      temporalSharpness = value;
     else
       device->printWarning("unknown filter parameter or type mismatch: '" + name + "'");
 
@@ -120,6 +122,8 @@ OIDN_NAMESPACE_BEGIN
       return temporalAlpha;
     else if (name == "temporalClamp")
       return temporalClamp;
+    else if (name == "temporalSharpness")
+      return temporalSharpness;
     else
       throw Exception(Error::InvalidArgument, "unknown filter parameter or type mismatch: '" + name + "'");
   }
@@ -177,7 +181,7 @@ OIDN_NAMESPACE_BEGIN
         if (outputTemp)
           workAmount += imageCopy->getWorkAmount();
         if (temporal)
-          workAmount += temporalAccum->getWorkAmount() + historyCopy->getWorkAmount();
+          workAmount += temporalAccum->getWorkAmount();
 
         progress = makeRef<Progress>(progressFunc, progressUserPtr, workAmount);
       }
@@ -271,22 +275,21 @@ OIDN_NAMESPACE_BEGIN
         const Ref<Image>& historyPrev = historyParity ? historyB : historyA;
         const Ref<Image>& historyCur  = historyParity ? historyA : historyB;
 
-        // Blend the current denoised output with the motion-compensated history
+        // Blend the current denoised output with the motion-compensated history,
+        // writing the un-sharpened result to the history and the resolved
+        // (optionally sharpened) result to the user output.
         temporalAccum->setColor(output);
         temporalAccum->setHistory(historyPrev);
         temporalAccum->setFlow(flow); // may be null (static reprojection)
         temporalAccum->setDst(historyCur);
+        temporalAccum->setOutput(output);
         temporalAccum->setAlpha(temporalAlpha);
         temporalAccum->setClampStrength(temporalClamp);
+        temporalAccum->setSharpness(temporalSharpness);
         temporalAccum->setReset(temporalReset);
         temporalAccum->submit(progress);
 
         device->submitBarrier();
-
-        // Write the accumulated result back to the user output image
-        historyCopy->setSrc(historyCur);
-        historyCopy->setDst(output);
-        historyCopy->submit(progress);
 
         // The accumulated frame becomes the history for the next frame
         historyParity = !historyParity;
@@ -386,7 +389,6 @@ OIDN_NAMESPACE_BEGIN
     imageCopy.reset();
     outputTemp.reset();
     temporalAccum.reset();
-    historyCopy.reset();
     historyA.reset();
     historyB.reset();
   }
@@ -716,9 +718,6 @@ OIDN_NAMESPACE_BEGIN
       temporalAccum = engine->newTemporalAccumulation();
       temporalAccum->finalize();
 
-      historyCopy = engine->newImageCopy();
-      historyCopy->finalize();
-
       historyParity = false;
       temporalReset = true; // the first frame has no usable history
     }
@@ -743,7 +742,6 @@ OIDN_NAMESPACE_BEGIN
     imageCopy.reset();
     outputTemp.reset();
     temporalAccum.reset();
-    historyCopy.reset();
     historyA.reset();
     historyB.reset();
   }

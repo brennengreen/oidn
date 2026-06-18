@@ -6,10 +6,13 @@ Version History
 -   Added temporally stable denoising for image sequences (animations) to the
     `RT` filter via the new `temporal` parameter, which performs
     motion-compensated temporal accumulation of the denoised frames with
-    neighborhood-based history rejection. It reuses the existing spatial models
-    (no retraining required), accepts optional screen-space motion vectors via
-    the new `flow` image, and is controlled by the `temporalAlpha` and
-    `temporalClamp` parameters. Currently supported on the CPU device.
+    neighborhood-based history rejection and sharp Catmull-Rom history
+    reprojection. It reuses the existing spatial models (no retraining
+    required), accepts optional screen-space motion vectors via the new `flow`
+    image, and is controlled by the `temporalAlpha`, `temporalClamp`, and
+    `temporalSharpness` parameters (the last applies an optional post-resolve
+    sharpening pass that recovers detail without amplifying noise). Currently
+    supported on the CPU device.
 
 ### Changes in v2.5.0:
 

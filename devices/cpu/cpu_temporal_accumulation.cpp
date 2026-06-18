@@ -18,28 +18,44 @@ OIDN_NAMESPACE_BEGIN
       return x < lo ? lo : (x > hi ? hi : x);
     }
 
-    // Bilinear sample of an image at floating-point pixel coordinates
-    oidn_inline vec3f sampleBilinear(const ImageAccessor& img, float x, float y)
+    // Catmull-Rom (cubic) interpolation weights for the 4 taps at offsets
+    // -1, 0, 1, 2 around the sample. Catmull-Rom has mild negative lobes, so it
+    // is sharpening: unlike bilinear it does not blur the history under
+    // sub-pixel motion, which is the standard fix for TAA accumulation blur.
+    oidn_inline void catmullRomWeights(float t, float w[4])
     {
-      const float xc = math::clamp(x, 0.f, float(img.W - 1));
-      const float yc = math::clamp(y, 0.f, float(img.H - 1));
+      const float t2 = t * t, t3 = t2 * t;
+      w[0] = -0.5f*t3 +      t2 - 0.5f*t;
+      w[1] =  1.5f*t3 - 2.5f*t2          + 1.f;
+      w[2] = -1.5f*t3 + 2.0f*t2 + 0.5f*t;
+      w[3] =  0.5f*t3 - 0.5f*t2;
+    }
 
-      const int x0 = int(std::floor(xc));
-      const int y0 = int(std::floor(yc));
-      const int x1 = clampInt(x0 + 1, 0, img.W - 1);
-      const int y1 = clampInt(y0 + 1, 0, img.H - 1);
+    // Sharp 4x4 Catmull-Rom sample of an image at floating-point pixel coords.
+    oidn_inline vec3f sampleCatmullRom(const ImageAccessor& img, float x, float y)
+    {
+      x = math::clamp(x, 0.f, float(img.W - 1));
+      y = math::clamp(y, 0.f, float(img.H - 1));
 
-      const float fx = xc - float(x0);
-      const float fy = yc - float(y0);
+      const int ix = int(std::floor(x));
+      const int iy = int(std::floor(y));
+      float wx[4], wy[4];
+      catmullRomWeights(x - float(ix), wx);
+      catmullRomWeights(y - float(iy), wy);
 
-      const vec3f c00 = img.get3<float>(y0, x0);
-      const vec3f c10 = img.get3<float>(y0, x1);
-      const vec3f c01 = img.get3<float>(y1, x0);
-      const vec3f c11 = img.get3<float>(y1, x1);
-
-      const vec3f c0 = c00 * (1.f - fx) + c10 * fx;
-      const vec3f c1 = c01 * (1.f - fx) + c11 * fx;
-      return c0 * (1.f - fy) + c1 * fy;
+      vec3f acc(0.f);
+      for (int j = 0; j < 4; ++j)
+      {
+        const int sy = clampInt(iy - 1 + j, 0, img.H - 1);
+        vec3f row(0.f);
+        for (int i = 0; i < 4; ++i)
+        {
+          const int sx = clampInt(ix - 1 + i, 0, img.W - 1);
+          row = row + img.get3<float>(sy, sx) * wx[i];
+        }
+        acc = acc + row * wy[j];
+      }
+      return acc;
     }
   }
 
@@ -50,6 +66,7 @@ OIDN_NAMESPACE_BEGIN
     const ImageAccessor color   = *this->color;
     const ImageAccessor history = *this->history;
     const ImageAccessor dst     = *this->dst;
+    const ImageAccessor output  = *this->output;
     const bool hasFlow = bool(this->flow);
     const ImageAccessor flow = hasFlow ? ImageAccessor(*this->flow) : ImageAccessor{};
 
@@ -57,10 +74,12 @@ OIDN_NAMESPACE_BEGIN
     const int W = dst.W;
     const float alpha = this->alpha;
     const float clampStrength = this->clampStrength;
+    const float sharpness = this->sharpness;
     const bool reset = this->reset;
 
     engine->submitFunc([=]
     {
+      // Pass 1: motion-compensated temporal accumulation -> dst (next history)
       parallel_for(H, [&](int h)
       {
         for (int w = 0; w < W; ++w)
@@ -92,7 +111,8 @@ OIDN_NAMESPACE_BEGIN
             continue;
           }
 
-          vec3f hist = math::nan_to_zero(sampleBilinear(history, px, py));
+          // Sharp (Catmull-Rom) reprojection avoids bilinear accumulation blur
+          vec3f hist = math::nan_to_zero(sampleCatmullRom(history, px, py));
 
           // History rejection via neighborhood variance clipping (SVGF/TAA):
           // clamp the reprojected history to the local color statistics of the
@@ -123,9 +143,55 @@ OIDN_NAMESPACE_BEGIN
             hist = math::min(math::max(hist, lo), hi);
           }
 
+          // Catmull-Rom can overshoot slightly; keep colors non-negative
+          hist = math::max(hist, vec3f(0.f));
+
           // Exponential blend of the (clamped, reprojected) history and current
           const vec3f accum = hist * (1.f - alpha) + cur * alpha;
           dst.set3(h, w, accum);
+        }
+      });
+
+      // Pass 2: resolve to output, with optional contrast-limited sharpening.
+      // Reads the fully-written accumulation buffer (dst) and never writes back
+      // to the history, so the sharpening cannot compound or destabilize.
+      parallel_for(H, [&](int h)
+      {
+        for (int w = 0; w < W; ++w)
+        {
+          const vec3f c = dst.get3<float>(h, w);
+
+          if (sharpness <= 0.f)
+          {
+            output.set3(h, w, c);
+            continue;
+          }
+
+          // 3x3 neighborhood: blurred mean (for unsharp) and min/max (limiter)
+          vec3f sum(0.f), lo = c, hi = c;
+          for (int dy = -1; dy <= 1; ++dy)
+          {
+            const int hh = clampInt(h + dy, 0, H - 1);
+            for (int dx = -1; dx <= 1; ++dx)
+            {
+              const int ww = clampInt(w + dx, 0, W - 1);
+              const vec3f s = dst.get3<float>(hh, ww);
+              sum = sum + s;
+              lo = math::min(lo, s);
+              hi = math::max(hi, s);
+            }
+          }
+          const vec3f mean = sum * (1.f / 9.f);
+
+          // Unsharp mask, limited to an expanded local range to allow real
+          // sharpening while still suppressing edge halos/ringing
+          const vec3f ext = (hi - lo) * 0.5f;
+          const vec3f loE = lo - ext;
+          const vec3f hiE = hi + ext;
+          vec3f o = c + (c - mean) * sharpness;
+          o = math::min(math::max(o, loE), hiE);
+          o = math::max(o, vec3f(0.f));
+          output.set3(h, w, o);
         }
       });
     }, ct);
